@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<!--
+  Thesis service classes.
+
+  Two classes only. They are deliberately constructed to present IDENTICAL offered load
+  to both the radio and the compute tier, and to differ ONLY in granularity and deadline:
+
+    compute load per device : URLLC-like  25 MI x 50 req/s = 1250 MI/s
+                              eMBB-like  250 MI x  5 req/s = 1250 MI/s
+    radio load per device   : URLLC-like 1.5 KB x 50 req/s =   75 KB/s
+                              eMBB-like   15 KB x  5 req/s =   75 KB/s
+
+  This isolates deadline strictness as the experimental variable: any difference in
+  behaviour between the classes cannot be attributed to one of them simply loading the
+  system more heavily.
+
+  Deadlines (max_delay_requirement) are citation-grounded end-to-end budgets and are NOT
+  to be adjusted to fit the simulator:
+    URLLC-like  10 ms - latency-sensitive AR workload deadline (Nezami et al.)
+    eMBB-like  100 ms - vehicular service request constraint (Surayya et al.)
+
+  vm_utilization_on_edge=50 for both classes (derived, not arbitrary - audited 2026-08-25):
+  each edge VM is defined in edge_devices.xml as core=2, mips=10000 (PER CORE, confirmed
+  from DefaultEdgeServerManager.createVmList()'s Vm constructor call, where the mips
+  value and core count are passed as separate constructor arguments) -> 20000 MIPS total
+  VM capacity. required_core=1 for both classes, so one task requests exactly 1 of the
+  VM's 2 cores' worth of capacity: (1/2)*100% = 50%. At 50%, a lone task on an otherwise-
+  idle VM gets 50% x 20000 = 10,000 MIPS = 10 MI/ms - this is exactly the empirically
+  measured effective rate (10 MI/ms, from deep-log processing-time regression) the
+  task_length values above were calibrated against, so vm_utilization_on_edge and
+  task_length are mutually consistent by derivation, not coincidence. This also bounds
+  per-VM concurrency at 2 tasks of either class before capacity rejection, independent of
+  task type - keeping the capacity axis orthogonal to the deadline-strictness axis, which
+  is the same "identical load, different granularity" principle behind the class design.
+-->
+<applications>
+	<application name="URLLC_LIKE">
+		<usage_percentage>50</usage_percentage>
+		<prob_cloud_selection>0</prob_cloud_selection>
+		<poisson_interarrival>0.02</poisson_interarrival>
+		<delay_sensitivity>0.9</delay_sensitivity>
+		<active_period>40</active_period>
+		<idle_period>20</idle_period>
+		<data_upload>1</data_upload>
+		<data_download>0.5</data_download>
+		<task_length>25</task_length>
+		<required_core>1</required_core>
+		<vm_utilization_on_edge>50</vm_utilization_on_edge>
+		<vm_utilization_on_cloud>5</vm_utilization_on_cloud>
+		<vm_utilization_on_mobile>0</vm_utilization_on_mobile>
+		<max_delay_requirement>0.010</max_delay_requirement>
+	</application>
+	<application name="EMBB_LIKE">
+		<usage_percentage>50</usage_percentage>
+		<prob_cloud_selection>0</prob_cloud_selection>
+		<poisson_interarrival>0.2</poisson_interarrival>
+		<delay_sensitivity>0.1</delay_sensitivity>
+		<active_period>40</active_period>
+		<idle_period>20</idle_period>
+		<data_upload>10</data_upload>
+		<data_download>5</data_download>
+		<task_length>250</task_length>
+		<required_core>1</required_core>
+		<vm_utilization_on_edge>50</vm_utilization_on_edge>
+		<vm_utilization_on_cloud>5</vm_utilization_on_cloud>
+		<vm_utilization_on_mobile>0</vm_utilization_on_mobile>
+		<max_delay_requirement>0.100</max_delay_requirement>
+	</application>
+</applications>
