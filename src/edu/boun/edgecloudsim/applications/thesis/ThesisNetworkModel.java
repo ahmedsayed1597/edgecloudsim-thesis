@@ -191,9 +191,34 @@ public class ThesisNetworkModel extends NetworkModel {
 
 	@Override
 	public void initialize() {
-		// Initialize per-AP arrays (one AP per edge datacenter)
-		// Derive initial MAN queue means from task lookup table (weighted by usage percentages)
-		// Assumption: half tasks initially traverse MAN (factor 4 used as heuristic scaling)
+		/**
+		 * poisson_interarrival derivation (load-symmetry design)
+		 * ---------------------------------------------------------------------
+		 * Goal: both classes must place IDENTICAL compute load per device
+		 * (1250 MI/sec), so any difference in results is caused by deadline
+		 * strictness alone, not by one class simply loading the system harder
+		 * than the other.
+		 *
+		 * Step 1: task_length is already fixed (25 MI for URLLC_LIKE, 250 MI for
+		 *         EMBB_LIKE), derived separately from the measured 10 MI/ms VM
+		 *         processing rate.
+		 *
+		 * Step 2: required tasks/sec = target load (MI/sec) / task_length (MI)
+		 *           URLLC_LIKE: 1250 / 25  = 50 tasks/sec
+		 *           EMBB_LIKE:  1250 / 250 =  5 tasks/sec
+		 *
+		 * Step 3: poisson_interarrival = 1 / (tasks/sec)
+		 *         [config wants seconds BETWEEN tasks, not tasks per second,
+		 *         so the rate is inverted]
+		 *           URLLC_LIKE: 1 / 50 = 0.02
+		 *           EMBB_LIKE:  1 / 5  = 0.2
+		 *
+		 * Result: URLLC_LIKE = many small tasks (0.02s apart), EMBB_LIKE = few
+		 * large tasks (0.2s apart) — same total compute load, different
+		 * granularity. The 10:1 ratio between the two interarrival values falls
+		 * directly out of the 10:1 ratio already fixed in task_length; it is
+		 * not chosen independently.
+		 */
 		wanClients = new int[SimSettings.getInstance().getNumOfEdgeDatacenters()];  //we have one access point for each datacenter
 		wlanClients = new int[SimSettings.getInstance().getNumOfEdgeDatacenters()];  //we have one access point for each datacenter
 
@@ -321,16 +346,7 @@ public class ThesisNetworkModel extends NetworkModel {
 
 	@Override
 	public void downloadStarted(Location accessPointLocation, int sourceDeviceId) {
-		// THESIS FIX 2026-08-25: this method and downloadFinished() below were empty in
-		// tutorial3's own SampleNetworkModel.java, upstream (confirmed via git blame:
-		// commit f6dc6aa, the original project maintainer's own commit, not something
-		// introduced by copying it in here or by any local edit). Consequence: wlanClients
-		// / wanClients - the per-AP concurrency counters that getWlanDownloadDelay() /
-		// getWanDownloadDelay() read to pick a throughput from the experimental tables -
-		// were incremented and decremented only by uploads. Downloads never registered as
-		// load, so download-direction delay was computed against an undercounted AP
-		// occupancy. Fix: mirror uploadStarted()/uploadFinished() exactly, using
-		// sourceDeviceId (the download's origin) in place of destDeviceId.
+
 		if(sourceDeviceId == SimSettings.CLOUD_DATACENTER_ID)
 			wanClients[accessPointLocation.getServingWlanId()]++;
 		else if (sourceDeviceId == SimSettings.GENERIC_EDGE_DEVICE_ID)
@@ -428,15 +444,7 @@ public class ThesisNetworkModel extends NetworkModel {
 				ManPoissonMeanForDownload,
 				avgManTaskOutputSize,
 				numberOfMobileDevices);
-		
-		// THESIS FIX 2026-08-25: upstream accumulated avgManTaskOutputSize (the running
-		// average FROM THE PREVIOUS window) into the total instead of this task's real
-		// output size. Since avgManTaskOutputSize does not change again until the tick
-		// boundary, that made every accumulation within a window add the SAME value,
-		// so the "recomputed" average at the next tick was mathematically identical to
-		// the value it started from - avgManTaskOutputSize was frozen at its
-		// initialization value for the entire run regardless of real traffic. Confirmed
-		// directly: instrumented printing showed avgSizeKB=2.7500 on every single tick,
+
 		// at every device count tested. Fix: accumulate the real per-task size.
 		totalManTaskOutputSize += task.getCloudletOutputSize();
 		numOfManTaskForDownload++;
@@ -453,9 +461,8 @@ public class ThesisNetworkModel extends NetworkModel {
 				ManPoissonMeanForUpload,
 				avgManTaskInputSize,
 				numberOfMobileDevices);
-		
-		// THESIS FIX 2026-08-25: see getManDownloadDelay() above - same defect, same fix,
-		// mirrored for the upload direction.
+
+		// at every device count tested. Fix: accumulate the real per-task size.
 		totalManTaskInputSize += task.getCloudletFileSize();
 		numOfManTaskForUpload++;
 
