@@ -227,8 +227,9 @@ def autosize(ws):
 
 def write_paired_comparison_sheet(wb, paired_rows):
     ws = wb.create_sheet("Paired Comparison")
-    headers = ["devices", "class", "CENTR within%", "DECENTR within%", "gap (D-C)",
-               "CENTR MANhop%", "DECENTR MANhop%"]
+    headers = ["Devices", "Service Class",
+               "CENTRALIZED Compliance %", "DECENTRALIZED Compliance %", "Gap (D-C)",
+               "CENTRALIZED MAN-Hop %", "DECENTRALIZED MAN-Hop %"]
     ws.append(headers)
     for r in sorted(paired_rows, key=lambda x: (x["devices"], x["cls"])):
         row_idx = ws.max_row + 1
@@ -263,8 +264,9 @@ def write_paired_comparison_sheet(wb, paired_rows):
 
 def write_failure_mechanism_sheet(wb, dominant_rows):
     ws = wb.create_sheet("Failure Mechanism")
-    headers = ["devices", "class", "CENTR reason", "CENTR count",
-               "DECENTR reason", "DECENTR count"]
+    headers = ["Devices", "Service Class",
+               "CENTRALIZED - Dominant Failure Reason", "No. of Failures",
+               "DECENTRALIZED - Dominant Failure Reason", "No. of Failures"]
     ws.append(headers)
     for r in sorted(dominant_rows, key=lambda x: (x["devices"], x["cls"])):
         ws.append([r["devices"], r["cls"], r["centr_reason"], r["centr_count"],
@@ -277,7 +279,8 @@ def write_failure_mechanism_sheet(wb, dominant_rows):
 
 def write_compliance_detail_sheet(wb, compliance_rows):
     ws = wb.create_sheet("Compliance Detail")
-    headers = ["devices", "policy", "class", "n_ok", "n_fail", "within%", "MANhop%", "ownFail%"]
+    headers = ["Devices", "Policy", "Service Class", "No. Tasks Passed", "No. Tasks Failed",
+               "Compliance %", "MAN-Hop %", "Failure %"]
     ws.append(headers)
     for r in sorted(compliance_rows, key=lambda x: (x["devices"], x["policy"], x["cls"])):
         row_idx = ws.max_row + 1
