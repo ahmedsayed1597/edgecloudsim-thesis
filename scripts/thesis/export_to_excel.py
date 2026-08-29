@@ -293,8 +293,10 @@ def write_compliance_detail_sheet(wb, compliance_rows):
 
 def write_failure_breakdown_sheet(wb, breakdown_rows):
     ws = wb.create_sheet("Failure Breakdown")
-    headers = ["devices", "policy", "class", "vmCap", "wlanCov", "mobility",
-               "bwLAN", "bwMAN", "bwWAN", "bwGSM"]
+    headers = ["Devices", "Policy", "Service Class",
+               "No. Failed (VM Overload)", "No. Failed (WLAN Loss)", "No. Failed (Device Mobility)",
+               "No. Failed (LAN Bandwidth)", "No. Failed (MAN Bandwidth)",
+               "No. Failed (WAN Bandwidth)", "No. Failed (GSM Bandwidth)"]
     ws.append(headers)
     for r in sorted(breakdown_rows, key=lambda x: (x["devices"], x["policy"], x["cls"])):
         ws.append([r["devices"], r["policy"], r["cls"], r["vm_capacity"], r["wlan_coverage"],
