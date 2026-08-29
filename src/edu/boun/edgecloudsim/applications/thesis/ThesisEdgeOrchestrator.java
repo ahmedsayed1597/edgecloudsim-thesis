@@ -205,21 +205,7 @@ public class ThesisEdgeOrchestrator extends EdgeOrchestrator {
 	 * comparison to isolate visibility rather than algorithm quality.
 	 */
 	private Vm selectVm(List<Integer> candidateHostIds, Task task) {
-		// THESIS CHANGE 2026-08-25: tutorial3's original strict '>' comparison here
-		// meant that among VMs tied at the best residual capacity, the first one
-		// encountered in host-iteration order always won. Under light-to-moderate load
-		// many VMs are simultaneously idle (capacity=100), so this deterministically
-		// concentrated load on the lowest-indexed host: verified at 150 devices, where
-		// CENTRALIZED never once selected 2 of its 14 visible hosts across 120,613
-		// tasks. That confounds the load-balance metric (measuring iteration order, not
-		// topology) and inflates CENTRALIZED's effective MAN hop distance beyond what
-		// visibility alone would cause.
-		//
-		// Fix: collect every VM tied at the best capacity, then pick uniformly at
-		// random among them via a seeded RNG. "Least loaded" itself is unchanged -
-		// only which of several equally-loaded VMs wins is now randomized. The same
-		// selectVm() runs for both policies, so this cannot become a difference
-		// between them; it only removes an arbitrary bias that applied to both.
+
 		List<Vm> bestVms = new ArrayList<Vm>();
 		double bestCapacity = 0; // start with min value, same threshold as upstream
 
