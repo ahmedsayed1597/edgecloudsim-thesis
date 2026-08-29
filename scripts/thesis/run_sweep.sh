@@ -1,7 +1,13 @@
 #!/bin/bash
-# Runs the thesis device-count sweep for whatever range/policies are currently set in
-# scripts/thesis/config/default_config.properties, then verifies every
-# (policy, device count) combination actually produced its result files.
+# Complete workflow: Run thesis device-count sweep + Python analysis + Excel export
+#
+# STEP 1: Runs Java MainApp for whatever range/policies are currently set in
+#         scripts/thesis/config/default_config.properties, then verifies every
+#         (policy, device count) combination actually produced its result files.
+#
+# STEP 2: Runs Python analyze_run.py to extract metrics from log files
+#
+# STEP 3: Runs Python export_to_excel.py to create results.xlsx
 #
 # WHY THIS SCRIPT EXISTS: MainApp cleans its output folder once at the START of each
 # invocation, not per policy or per device count. So as long as orchestrator_policies
@@ -20,6 +26,10 @@
 # Reads device range, policies, and scenario straight from
 # scripts/thesis/config/default_config.properties - edit that file to change the sweep,
 # not this script.
+#
+# Output:
+#   - Log files: sim_results/thesis/ite1/
+#   - Excel report: results.xlsx
 
 set -euo pipefail
 
@@ -55,6 +65,9 @@ fi
 
 echo "Sweep: devices $MIN_DEV..$MAX_DEV step $STEP_DEV | policies: $POLICIES_RAW | scenarios: $SCENARIOS_RAW"
 echo
+echo "================================================================================"
+echo "STEP 1: Running Java simulation"
+echo "================================================================================"
 
 java -classpath "bin;lib/cloudsim-7.0.0-alpha.jar;lib/commons-math3-3.6.1.jar;lib/colt.jar" \
 	edu.boun.edgecloudsim.applications.thesis.MainApp "$CONFIG" "$EDGE" "$APPS" "$OUT" 1
@@ -81,7 +94,38 @@ done
 echo
 if [ "$MISSING" -eq 0 ]; then
 	echo "SUCCESS: all $CHECKED result files present in $OUT."
-	echo "Next: python scripts/thesis/analyze_run.py $OUT"
+	echo
+	echo "================================================================================"
+	echo "STEP 2: Analyzing results (extracting metrics)"
+	echo "================================================================================"
+	python scripts/thesis/analyze_run.py "$OUT"
+
+	if [ $? -eq 0 ]; then
+		echo
+		echo "================================================================================"
+		echo "STEP 3: Exporting to Excel (creating results.xlsx)"
+		echo "================================================================================"
+		python scripts/thesis/export_to_excel.py "$OUT"
+
+		if [ $? -eq 0 ]; then
+			echo
+			echo "================================================================================"
+			echo "COMPLETE!"
+			echo "================================================================================"
+			echo
+			echo "Output:"
+			echo "  - Log files:    $OUT/"
+			echo "  - Excel report: results.xlsx"
+			echo
+			echo "Next: Open results.xlsx in Excel to view formatted tables"
+		else
+			echo "ERROR: Excel export failed"
+			exit 1
+		fi
+	else
+		echo "ERROR: Python analysis failed"
+		exit 1
+	fi
 else
 	echo "FAILED: $MISSING of $CHECKED result file(s) missing. Check the console output above for errors."
 	exit 1

@@ -378,13 +378,13 @@ def build_workbook(stdout_text, results_dir):
         sys.exit(1)
 
     wb = Workbook()
-    wb.remove(wb.active)  # drop the default blank sheet; Summary is inserted at index 0
+    wb.remove(wb.active)  # remove default blank sheet
 
     paired_ws, paired_last_row = write_paired_comparison_sheet(wb, paired_rows)
     write_failure_mechanism_sheet(wb, dominant_rows)
     write_compliance_detail_sheet(wb, compliance_rows)
     write_failure_breakdown_sheet(wb, breakdown_rows)
-    write_summary_sheet(wb, paired_last_row, results_dir)  # inserted at index 0 last, on top
+    # write_summary_sheet(wb, paired_last_row, results_dir)  # THESIS: disabled, not needed
 
     return wb
 
