@@ -33,10 +33,8 @@ public class ThesisScenarioFactory implements ScenarioFactory {
 	private double simulationTime;
 	private String orchestratorPolicy;
 	private String simScenario;
-	// THESIS CHANGE: seed for the reproducible mobility and load models. Identical across
-	// policies within a repetition so the strategies are compared on the same trace.
+
 	private long seed;
-	// THESIS CHANGE: shared config reader for region_count and the two decision delays.
 	private ThesisConfig thesisConfig;
 	
 	ThesisScenarioFactory(int _numOfMobileDevice,
