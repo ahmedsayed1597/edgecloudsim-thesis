@@ -23,7 +23,10 @@ Usage:
 import sys
 import re
 import subprocess
+import os
+from datetime import datetime
 from pathlib import Path
+import configparser
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
@@ -35,6 +38,84 @@ HEADER_FONT = Font(bold=True, color="FFFFFF")
 THIN = Side(style="thin", color="B0B0B0")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 PCT_FMT = "0.0%"
+
+
+# ---------------------------------------------------------------------------
+# Auto-increment filename to avoid overwriting existing results
+# ---------------------------------------------------------------------------
+
+def get_next_available_filename(base_name="results.xlsx"):
+	"""Find next available filename: results.xlsx, results_1.xlsx, results_2.xlsx, etc."""
+	if not os.path.exists(base_name):
+		return base_name
+
+	counter = 1
+	while os.path.exists(f"results_{counter}.xlsx"):
+		counter += 1
+
+	return f"results_{counter}.xlsx"
+
+
+# ---------------------------------------------------------------------------
+# Read configuration and write CONFIG sheet
+# ---------------------------------------------------------------------------
+
+def get_config_from_file(config_path="scripts/thesis/config/default_config.properties"):
+	"""Read simulation parameters from config file (handles .properties format without [DEFAULT])."""
+	config = configparser.ConfigParser()
+	try:
+		config.read(config_path)
+		if config.sections() or config.defaults():
+			return config  # Successfully parsed as INI
+	except configparser.MissingSectionHeaderError:
+		pass  # Fall through to manual parsing
+
+	# Manual parsing for .properties files without [DEFAULT] header
+	if 'DEFAULT' not in config:
+		config['DEFAULT'] = {}
+	try:
+		with open(config_path) as f:
+			for line in f:
+				line = line.strip()
+				if line and not line.startswith('#'):
+					key, _, value = line.partition('=')
+					key = key.strip()
+					value = value.strip()
+					if key:
+						config['DEFAULT'][key] = value
+	except Exception as e:
+		print(f"Warning: Could not read config file {config_path}: {e}")
+
+	return config
+
+
+def write_config_sheet(wb, config_dict):
+	"""Write configuration metadata as the first sheet."""
+	ws = wb.create_sheet("CONFIG", 0)  # Insert at position 0 (first sheet)
+
+	ws["A1"] = "Simulation Configuration"
+	ws["A1"].font = Font(bold=True, size=14)
+
+	ws["A2"] = "Date & Time Run"
+	ws["B2"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+	row = 4
+	for key, value in config_dict.items():
+		ws[f"A{row}"] = key
+		ws[f"B{row}"] = value
+		row += 1
+
+	# Format: bold left column, borders
+	for r in range(1, row):
+		ws[f"A{r}"].font = Font(bold=True)
+		for col in ["A", "B"]:
+			ws[f"{col}{r}"].border = BORDER
+
+	# Auto-size columns
+	ws.column_dimensions["A"].width = 35
+	ws.column_dimensions["B"].width = 50
+
+	return ws
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +435,7 @@ def write_summary_sheet(wb, paired_last_row, results_dir):
     return ws
 
 
-def build_workbook(stdout_text, results_dir):
+def build_workbook(stdout_text, results_dir, config_dict=None):
     compliance_rows = parse_compliance_table(stdout_text)
     breakdown_rows = parse_failure_breakdown_table(stdout_text)
     paired_rows = parse_paired_compliance_table(stdout_text)
@@ -385,6 +466,10 @@ def build_workbook(stdout_text, results_dir):
     wb = Workbook()
     wb.remove(wb.active)  # remove default blank sheet
 
+    # Write CONFIG sheet first (at index 0)
+    if config_dict:
+        write_config_sheet(wb, config_dict)
+
     paired_ws, paired_last_row = write_paired_comparison_sheet(wb, paired_rows)
     write_failure_mechanism_sheet(wb, dominant_rows)
     write_compliance_detail_sheet(wb, compliance_rows)
@@ -399,11 +484,42 @@ def main():
         print(__doc__)
         sys.exit(1)
     results_dir = Path(sys.argv[1])
-    out_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("results.xlsx")
+
+    # Use auto-increment filename if not specified
+    if len(sys.argv) > 2:
+        out_path = Path(sys.argv[2])
+    else:
+        out_path = Path(get_next_available_filename("results.xlsx"))
 
     script_dir = Path(__file__).resolve().parent
+
+    # Read configuration from config file
+    config_path = script_dir / "config" / "default_config.properties"
+    config = get_config_from_file(str(config_path))
+
+    # Build config dictionary to include in Excel
+    config_dict = {}
+    if config and 'DEFAULT' in config:
+        config_dict = {
+            "Simulation Time": f"{config.get('DEFAULT', 'simulation_time', fallback='N/A')} min",
+            "Warm-up Period": f"{config.get('DEFAULT', 'warm_up_period', fallback='N/A')} min",
+            "MAN Bandwidth": f"{config.get('DEFAULT', 'man_bandwidth', fallback='N/A')} Mbps",
+            "L1 (Attractiveness)": f"{config.get('DEFAULT', 'attractiveness_L1_mean_waiting_time', fallback='N/A')} sec",
+            "L2 (Attractiveness)": f"{config.get('DEFAULT', 'attractiveness_L2_mean_waiting_time', fallback='N/A')} sec",
+            "L3 (Attractiveness)": f"{config.get('DEFAULT', 'attractiveness_L3_mean_waiting_time', fallback='N/A')} sec",
+            "Min Device Count": config.get('DEFAULT', 'min_number_of_mobile_devices', fallback='N/A'),
+            "Max Device Count": config.get('DEFAULT', 'max_number_of_mobile_devices', fallback='N/A'),
+            "Device Count Step": config.get('DEFAULT', 'mobile_device_counter_size', fallback='N/A'),
+            "VM MIPS Capacity": f"{config.get('DEFAULT', 'mips_for_cloud_vm', fallback='N/A')} MIPS",
+            "Region Count": config.get('DEFAULT', 'region_count', fallback='N/A'),
+            "Centralized Decision Delay": f"{config.get('DEFAULT', 'centralized_decision_delay', fallback='N/A')} sec",
+            "Decentralized Decision Delay": f"{config.get('DEFAULT', 'decentralized_decision_delay', fallback='N/A')} sec",
+            "Orchestrator Policies": config.get('DEFAULT', 'orchestrator_policies', fallback='N/A'),
+            "Simulation Scenarios": config.get('DEFAULT', 'simulation_scenarios', fallback='N/A'),
+        }
+
     stdout_text = run_analyze(results_dir, script_dir)
-    wb = build_workbook(stdout_text, results_dir)
+    wb = build_workbook(stdout_text, results_dir, config_dict)
     wb.save(out_path)
     print(f"Wrote {out_path.resolve()}")
 
