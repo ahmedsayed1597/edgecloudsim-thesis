@@ -437,24 +437,40 @@ public class ThesisNetworkModel extends NetworkModel {
 	}
 	
 	private double getManDownloadDelay(Task task) {
+		return getManDownloadTransferDelay(task.getCloudletOutputSize());
+	}
+
+	private double getManUploadDelay(Task task) {
+		return getManUploadTransferDelay(task.getCloudletFileSize());
+	}
+
+	/**
+	 * THESIS ADDITION - mobility Stage 2: size-parameterized extraction of
+	 * getManDownloadDelay(Task)'s body, so a Stage 2 migration transfer (which has no
+	 * Task object - it is an edge-to-edge state transfer, not a device request) can share
+	 * the EXACT SAME adaptive MM1 queue/congestion state as real MAN task traffic,
+	 * instead of a second parallel network model. getManDownloadDelay(Task) above is now
+	 * a thin wrapper so existing task-based callers are unaffected.
+	 */
+	double getManDownloadTransferDelay(double dataSizeKB) {
 		// Use adaptive parameters to compute current MAN download delay
-		// Update rolling statistics for next interval adaptation
 		double result = calculateMM1(SimSettings.getInstance().getInternalLanDelay(),
 				MAN_BW,
 				ManPoissonMeanForDownload,
 				avgManTaskOutputSize,
 				numberOfMobileDevices);
 
-		// at every device count tested. Fix: accumulate the real per-task size.
-		totalManTaskOutputSize += task.getCloudletOutputSize();
+		// Update rolling statistics for next interval adaptation - accumulate the real
+		// transfer size (task or, for Stage 2, migration data) so avgManTaskOutputSize
+		// keeps reflecting actual MAN traffic composition.
+		totalManTaskOutputSize += dataSizeKB;
 		numOfManTaskForDownload++;
-		
-		//System.out.println("--> " + SimManager.getInstance().getNumOfMobileDevice() + " user, " +result + " sec");
-		
+
 		return result;
 	}
-	
-	private double getManUploadDelay(Task task) {
+
+	/** THESIS ADDITION - mobility Stage 2: see getManDownloadTransferDelay() above. */
+	double getManUploadTransferDelay(double dataSizeKB) {
 		// Symmetric logic for MAN upload path
 		double result = calculateMM1(SimSettings.getInstance().getInternalLanDelay(),
 				MAN_BW,
@@ -462,15 +478,65 @@ public class ThesisNetworkModel extends NetworkModel {
 				avgManTaskInputSize,
 				numberOfMobileDevices);
 
-		// at every device count tested. Fix: accumulate the real per-task size.
-		totalManTaskInputSize += task.getCloudletFileSize();
+		totalManTaskInputSize += dataSizeKB;
 		numOfManTaskForUpload++;
 
-		//System.out.println(CloudSim.clock() + " -> " + SimManager.getInstance().getNumOfMobileDevice() + " user, " + result + " sec");
-		
 		return result;
 	}
-	
+
+	/**
+	 * THESIS ADDITION - mobility Stage 2 (bug fix): cross-region migration delay,
+	 * DELIBERATELY separate from getManUploadTransferDelay() above.
+	 *
+	 * getManUploadTransferDelay() computes calculateMM1()'s mu (service rate) from
+	 * avgManTaskInputSize - the POPULATION-AVERAGE size across all real MAN uploads
+	 * (typically 0.5-15 KB per applications.xml). That is a pre-existing approximation
+	 * this stage does not change for real tasks. But a migration transfer (1000s of KB,
+	 * per migration_data_size_kb) is nowhere close to that average - reusing it would
+	 * silently price a migration as if it were an average-sized task, making migration
+	 * cost nearly free regardless of its actual configured size. That defeats Stage 2's
+	 * entire purpose (architecture-dependent migration cost).
+	 *
+	 * This method instead passes the migration's OWN size as the mu argument, so the
+	 * transfer is priced by its real weight while lambda (background arrival rate) still
+	 * reflects existing real-task congestion - migration genuinely competes for capacity
+	 * against that background load, it just isn't mispriced as a tiny task itself.
+	 *
+	 * Still updates the SAME adaptive accumulators as getManUploadTransferDelay(), so
+	 * subsequent real-task calls continue to reflect migration's contribution to overall
+	 * MAN traffic composition - this is not a parallel/disconnected model.
+	 */
+	double getManMigrationTransferDelay(double dataSizeKB) {
+		double result = calculateMM1(SimSettings.getInstance().getInternalLanDelay(),
+				MAN_BW,
+				ManPoissonMeanForUpload,
+				dataSizeKB,
+				numberOfMobileDevices);
+
+		totalManTaskInputSize += dataSizeKB;
+		numOfManTaskForUpload++;
+
+		return result;
+	}
+
+	/**
+	 * THESIS ADDITION - mobility Stage 2: bandwidth-limited-only transfer delay for a
+	 * SAME-REGION migration hop. Does NOT go through calculateMM1()'s M/M/1 queue -
+	 * unlike a cross-region migration, a same-region hop is not modeled as contending
+	 * with the shared MAN's queued task traffic, so DECENTRALIZED's region-restricted
+	 * migrations stay cheap/reliable while CENTRALIZED's occasional cross-region
+	 * migrations are exposed to the same congestion normal MAN-relayed tasks see. This
+	 * reuses the EXISTING MAN_BW and lan_internal_delay values - no new bandwidth or
+	 * propagation concept is introduced, only the existing MM1 queueing contention is
+	 * bypassed for this path. The existing 15s failure cap is mirrored here (returns 0)
+	 * purely for consistency with calculateMM1()'s failure semantics.
+	 */
+	double getLocalMigrationDelay(double dataSizeKB) {
+		double dataSizeKb = dataSizeKB * 8; //KB to Kb, same convention as calculateMM1
+		double result = dataSizeKb / MAN_BW + SimSettings.getInstance().getInternalLanDelay();
+		return (result > 15) ? 0 : result;
+	}
+
 	public void updateMM1QueeuModel(){
 		// Recompute Poisson means and average sizes based on window statistics.
 		// Avoid division by zero by checking task counts.

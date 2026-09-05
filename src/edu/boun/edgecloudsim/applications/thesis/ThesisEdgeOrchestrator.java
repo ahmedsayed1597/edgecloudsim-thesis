@@ -156,6 +156,34 @@ public class ThesisEdgeOrchestrator extends EdgeOrchestrator {
 				: config.getDecentralizedDecisionDelay();
 	}
 
+	/**
+	 * Region index for a WLAN id, using the same partition getCandidateHosts() uses for
+	 * DECENTRALIZED visibility. Exposed for migration detection (Stage 1, thesis
+	 * mobility work): a device's current region is derived from its serving WLAN id via
+	 * this same map, so "device region" and "candidate host region" are guaranteed to be
+	 * the same partition - not a parallel one that could silently drift out of sync.
+	 */
+	public int getWlanRegion(int wlanId) {
+		ensureRegionMapBuilt();
+		return wlanRegion[wlanId];
+	}
+
+	/**
+	 * Region index for a host id, using the same partition getCandidateHosts() uses.
+	 * Exposed for migration detection (Stage 1): the pinned server's region is looked up
+	 * through this method so it can be compared against getWlanRegion() for the device's
+	 * current location.
+	 */
+	public int getHostRegion(int hostId) {
+		ensureRegionMapBuilt();
+		return hostRegion[hostId];
+	}
+
+	/** THESIS ADDITION - mobility Stage 2: exposes the policy name for migration logging. */
+	public String getPolicy() {
+		return policy;
+	}
+
 	@Override
 	public int getDeviceToOffload(Task task) {
 		// This study is edge-only by design (applications.xml sets

@@ -94,7 +94,9 @@ public class ThesisScenarioFactory implements ScenarioFactory {
 	@Override
 	public MobileDeviceManager getMobileDeviceManager() throws Exception {
 		// Manages task submission, network events, logging
-		return new ThesisMobileDeviceManager();
+		// THESIS ADDITION - mobility Stage 2: thesisConfig now passed through so the device
+		// manager can read migration_data_size_kb for its migration delay calculation.
+		return new ThesisMobileDeviceManager(thesisConfig);
 	}
 
 	@Override

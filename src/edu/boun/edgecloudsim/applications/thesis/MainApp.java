@@ -10,6 +10,8 @@
 package edu.boun.edgecloudsim.applications.thesis;
 
 import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
@@ -205,6 +207,45 @@ public class MainApp {
 	
 							// Launch simulation (blocking until completion)
 							manager.startSimulation();
+
+							// THESIS ADDITION - mobility Stage 2: migration summary. Printed to
+							// console (same style as SimLogger's existing per-scenario performance
+							// block) AND written to a dedicated per-scenario log file using the SAME
+							// "SIMRESULT_<scenario>_<policy>_<devices>DEVICES_..." naming convention
+							// as every other log file, specifically so analyze_run.py (which globs
+							// SIMRESULT_*.log files, not console output) can pick it up.
+							ThesisMobileDeviceManager thesisDeviceManager =
+									(ThesisMobileDeviceManager) manager.getMobileDeviceManager();
+							int opportunities = thesisDeviceManager.getTotalMigrationCount();
+							int successful = thesisDeviceManager.getSuccessfulMigrationCount();
+							int failed = thesisDeviceManager.getFailedMigrationCount();
+							double totalDataKb = thesisDeviceManager.getTotalMigrationDataKb();
+							double totalTime = thesisDeviceManager.getTotalMigrationTime();
+							double avgTime = thesisDeviceManager.getAverageMigrationTime();
+							double maxTime = thesisDeviceManager.getMaxMigrationTime();
+
+							SimLogger.printLine("MIGRATION_SUMMARY opportunities=" + opportunities
+									+ " successful=" + successful
+									+ " failed=" + failed
+									+ " totalDataKB=" + String.format("%.1f", totalDataKb)
+									+ " totalTime=" + String.format("%.4f", totalTime)
+									+ " avgTime=" + String.format("%.4f", avgTime)
+									+ " maxTime=" + String.format("%.4f", maxTime));
+
+							if (SS.getFileLoggingEnabled()) {
+								String migrationFileName = "SIMRESULT_" + simScenario + "_"
+										+ orchestratorPolicy + "_" + j + "DEVICES_MIGRATION.log";
+								try (FileWriter fw = new FileWriter(new File(outputFolder, migrationFileName), true)) {
+									fw.write("# opportunities;successful;failed;totalDataKB;totalTime;avgTime;maxTime\n");
+									fw.write(opportunities + ";" + successful + ";" + failed + ";"
+											+ String.format("%.1f", totalDataKb) + ";"
+											+ String.format("%.4f", totalTime) + ";"
+											+ String.format("%.4f", avgTime) + ";"
+											+ String.format("%.4f", maxTime) + "\n");
+								} catch (IOException e) {
+									SimLogger.printLine("Warning: could not write migration log file: " + e.getMessage());
+								}
+							}
 						}
 						catch (Exception e)
 						{

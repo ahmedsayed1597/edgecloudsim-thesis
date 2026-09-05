@@ -240,6 +240,51 @@ def print_paired_failure_reasons(runs, names):
                   f"{d_label + ' (' + str(d_count) + ')':<18}")
 
 
+def parse_migration_summary(base_path):
+    """Reads <base_path>_MIGRATION.log (Stage 2 mobility work) and returns its single
+    data row as a dict, or None if the file doesn't exist (e.g. a pre-Stage-2 run)."""
+    path = f"{base_path}_MIGRATION.log"
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        lines = [ln.strip() for ln in f if not ln.startswith("#") and ln.strip()]
+    if not lines:
+        return None
+    parts = lines[-1].split(";")  # last row, in case the file was appended to across runs
+    if len(parts) < 7:
+        return None
+    return dict(
+        opportunities=int(parts[0]), successful=int(parts[1]), failed=int(parts[2]),
+        total_data_kb=float(parts[3]), total_time=float(parts[4]),
+        avg_time=float(parts[5]), max_time=float(parts[6]),
+    )
+
+
+def print_migration_summary(runs):
+    """Stage 2 mobility work: migration opportunities/attempts/successes per
+    (policy, device count), from the MIGRATION_SUMMARY log MainApp writes per scenario."""
+    any_found = False
+    rows = []
+    for (scenario_policy, devices) in sorted(runs.keys(), key=lambda k: (k[1], k[0])):
+        _, _, base = runs[(scenario_policy, devices)]
+        m = parse_migration_summary(base)
+        if m is not None:
+            any_found = True
+            rows.append((devices, scenario_policy, m))
+
+    if not any_found:
+        return  # no MIGRATION.log files - pre-Stage-2 run, say nothing rather than print an empty table
+
+    print()
+    print("Migration summary (Stage 2 - opportunities vs attempts vs successes):")
+    print(f"{'devices':>8} {'policy':<26} {'opport.':>8} {'success':>8} {'failed':>7} "
+          f"{'dataKB':>10} {'avgTime':>9} {'maxTime':>9}")
+    print("-" * 96)
+    for devices, scenario_policy, m in rows:
+        print(f"{devices:>8} {scenario_policy:<26} {m['opportunities']:>8} {m['successful']:>8} "
+              f"{m['failed']:>7} {m['total_data_kb']:>10.1f} {m['avg_time']:>9.4f} {m['max_time']:>9.4f}")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -282,6 +327,7 @@ def main():
 
     print_paired_compliance(runs, deadlines, names)
     print_paired_failure_reasons(runs, names)
+    print_migration_summary(runs)
 
 
 if __name__ == "__main__":

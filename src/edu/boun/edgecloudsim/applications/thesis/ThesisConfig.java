@@ -35,6 +35,7 @@ public class ThesisConfig {
 	private final int regionCount;
 	private final double centralizedDecisionDelay;
 	private final double decentralizedDecisionDelay;
+	private final double migrationDataSizeKb;
 
 	public ThesisConfig(String propertiesFile) {
 		Properties prop = new Properties();
@@ -50,6 +51,12 @@ public class ThesisConfig {
 		regionCount = Integer.parseInt(prop.getProperty("region_count", "4"));
 		centralizedDecisionDelay = Double.parseDouble(prop.getProperty("centralized_decision_delay", "0.005"));
 		decentralizedDecisionDelay = Double.parseDouble(prop.getProperty("decentralized_decision_delay", "0"));
+		// THESIS ADDITION - mobility Stage 2: service migration state-transfer size, in KB
+		// (same unit convention as data_upload/data_download in applications.xml and
+		// Task.getCloudletFileSize()). Default 1536 KB (1.5 MB) is the midpoint of the
+		// 0.6-2.5 MB range agreed with Ahmed for "service state" size during the Stage 2
+		// design discussion - not an arbitrarily invented number.
+		migrationDataSizeKb = Double.parseDouble(prop.getProperty("migration_data_size_kb", "1536"));
 
 		if (regionCount < 1) {
 			SimLogger.printLine("region_count must be >= 1! Terminating simulation...");
@@ -70,5 +77,10 @@ public class ThesisConfig {
 	/** Simulated-time cost (seconds) of a DECENTRALIZED placement decision. */
 	public double getDecentralizedDecisionDelay() {
 		return decentralizedDecisionDelay;
+	}
+
+	/** Service state-transfer size (KB) used for Stage 2 migration delay calculation. */
+	public double getMigrationDataSizeKb() {
+		return migrationDataSizeKb;
 	}
 }

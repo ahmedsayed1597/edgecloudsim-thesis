@@ -27,6 +27,9 @@
 
 package edu.boun.edgecloudsim.applications.thesis;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import org.cloudbus.cloudsim.UtilizationModel;
 import org.cloudbus.cloudsim.UtilizationModelFull;
 import org.cloudbus.cloudsim.Vm;
@@ -76,8 +79,39 @@ public class ThesisMobileDeviceManager extends MobileDeviceManager {
 
 	// THESIS ADDITION 2026-08-25: wall-clock reference for RUNTIME_CHECKPOINT logging.
 	private long simulationStartWallClockMs;
-	
-	public ThesisMobileDeviceManager() throws Exception{
+
+	// cost, delay, or traffic is modeled here - this only pins a device's service to the
+	// host its first task lands on, then counts how many times the device's current
+	// region diverges from that pinned host's region.
+	private Map<Integer, Integer> pinnedHostByDevice = new HashMap<Integer, Integer>();
+	// pinnedRegionByDevice: deviceId -> region of the pinned host, cached at pin time so
+	// detection doesn't need to re-derive it.
+	private Map<Integer, Integer> pinnedRegionByDevice = new HashMap<Integer, Integer>();
+	// outsidePinnedRegionByDevice: deviceId -> true once a migration has been counted for
+	// the CURRENT excursion outside the pinned region.
+	private Map<Integer, Boolean> outsidePinnedRegionByDevice = new HashMap<Integer, Boolean>();
+	// Per-device migration TRIGGER counts (Stage 1 metric - "migration opportunities").
+	// Preserved unchanged so Stage 2 results can be compared: opportunities vs attempts
+	// vs successes. Every trigger now leads to an attempt (see detectMigration()), so
+	// attemptCount == totalMigrationCount in this implementation, but the two are kept
+	// as separate counters/names since they measure conceptually different things.
+	private Map<Integer, Integer> migrationCountByDevice = new HashMap<Integer, Integer>();
+	private int totalMigrationCount = 0;
+
+	// THESIS ADDITION - mobility Stage 2: actual service migration (see class-level
+	// Stage 1 comment above for the "service location" vs "task placement" distinction,
+	// which still holds - Stage 2 only changes what happens at a migration TRIGGER; task
+	// routing for the triggering task itself, and every other task, is completely
+	// unaffected). thesisConfig is needed here for migration_data_size_kb.
+	private final ThesisConfig thesisConfig;
+	private int successfulMigrationCount = 0;
+	private int failedMigrationCount = 0;
+	private double totalMigrationDataKb = 0;
+	private double totalMigrationTime = 0; // sum of successful migration delays (seconds)
+	private double maxMigrationTime = 0;
+
+	public ThesisMobileDeviceManager(ThesisConfig _thesisConfig) throws Exception{
+		thesisConfig = _thesisConfig;
 	}
 
 	@Override
@@ -329,6 +363,227 @@ public class ThesisMobileDeviceManager extends MobileDeviceManager {
 		}
 	}
 
+	/**
+	 * Stage 1 migration TRIGGER detection, now extended for Stage 2 (mobility work - see
+	 * the pinnedHostByDevice field comments above for the full "service location" vs
+	 * "task placement" design rationale, which is unchanged). Pins a device's service to
+	 * whichever host its FIRST task lands on, via the existing orchestrator selection
+	 * (this method never influences THIS task's own placement - it only reads the
+	 * result). On every later task, compares the device's CURRENT region against the
+	 * pinned host's region; the FIRST task submitted after the device leaves the pinned
+	 * region triggers exactly one migration ATTEMPT (see attemptMigration() below).
+	 *
+	 * @param task the task currently being submitted (used both for its device id/location
+	 *        and, on a migration trigger, as the orchestrator-selection proxy for "the
+	 *        device's current location" - see attemptMigration())
+	 * @param candidateHostId the host the orchestrator selected for THIS task's own
+	 *        placement (only used to establish the pin on the device's first task)
+	 * @param currentLocation the device's location at submission time (already computed
+	 *        by the caller as part of normal task submission)
+	 */
+	private void detectMigration(Task task, int candidateHostId, Location currentLocation) {
+		int deviceId = task.getMobileDeviceId();
+		ThesisEdgeOrchestrator orchestrator =
+				(ThesisEdgeOrchestrator) SimManager.getInstance().getEdgeOrchestrator();
+
+		int currentRegion = orchestrator.getWlanRegion(currentLocation.getServingWlanId());
+
+		Integer pinnedHost = pinnedHostByDevice.get(deviceId);
+		if (pinnedHost == null) {
+			// First task for this device: pin service to whatever host the orchestrator
+			// selected for it. Never re-pin on later tasks just because they landed
+			// elsewhere - re-pinning every task would measure task-placement churn, not
+			// service migration. The pin only changes via a successful migration below.
+			pinnedHostByDevice.put(deviceId, candidateHostId);
+			pinnedRegionByDevice.put(deviceId, orchestrator.getHostRegion(candidateHostId));
+			outsidePinnedRegionByDevice.put(deviceId, false);
+			return;
+		}
+
+		int pinnedRegion = pinnedRegionByDevice.get(deviceId);
+		boolean alreadyOutside = outsidePinnedRegionByDevice.get(deviceId);
+
+		if (currentRegion != pinnedRegion) {
+			if (!alreadyOutside) {
+				// State transition: inside pinned region -> outside. Trigger exactly once
+				// per excursion; the alreadyOutside gate is set immediately below
+				// (regardless of the migration attempt's outcome) so a failed attempt
+				// does not retry on every subsequent task - see attemptMigration().
+				totalMigrationCount++;
+				Integer deviceCountBoxed = migrationCountByDevice.get(deviceId);
+				int deviceCount = (deviceCountBoxed == null ? 0 : deviceCountBoxed) + 1;
+				migrationCountByDevice.put(deviceId, deviceCount);
+				outsidePinnedRegionByDevice.put(deviceId, true);
+
+				SimLogger.printLine(String.format(
+						"MIGRATION_DETECTED device=%d oldServer=%d oldRegion=%d currentRegion=%d time=%.1f",
+						deviceId, pinnedHost, pinnedRegion, currentRegion, CloudSim.clock()));
+
+				attemptMigration(orchestrator, task, deviceId, pinnedHost, pinnedRegion, currentRegion);
+			}
+			// else: already flagged outside for this excursion - do not re-trigger.
+		} else {
+			// Device is inside (or has returned to) the pinned region: reset the gate so
+			// a FUTURE departure can trigger a new migration attempt.
+			outsidePinnedRegionByDevice.put(deviceId, false);
+		}
+	}
+
+	/**
+	 * THESIS ADDITION - mobility Stage 2: performs one migration attempt, called exactly
+	 * once per excursion from detectMigration() above (never on every task while outside
+	 * the pinned region - see the alreadyOutside gate there).
+	 *
+	 * Host selection reuses SimManager's edge orchestrator getVmToOffload() - the EXACT
+	 * SAME call submitTask() already makes for real task placement - passing the
+	 * triggering task itself, whose submittedLocation is the device's current location.
+	 * This means CENTRALIZED's full-visibility selection and DECENTRALIZED's
+	 * region-restricted selection are reused verbatim; no new placement algorithm is
+	 * introduced here (per the thesis's core constraint that both policies must share
+	 * identical selection logic, differing only in visibility).
+	 *
+	 * Network cost reuses ThesisNetworkModel's existing MAN M/M/1 model for cross-region
+	 * transfers - via getManMigrationTransferDelay(), which prices the transfer by its
+	 * OWN real size rather than the population-average real-task size, while still
+	 * contending against the same background congestion real MAN-relayed tasks create
+	 * (see that method's comment for why this differs from getManUploadTransferDelay()) -
+	 * and a bandwidth-only calculation for same-region transfers (bypassing the M/M/1
+	 * queue - see getLocalMigrationDelay()'s comment for why).
+	 *
+	 * IMPORTANT: "same-region" is judged against the DEVICE'S CURRENT region, not the OLD
+	 * pinned region. The old pinned region is, by the trigger condition itself, always
+	 * different from the device's current region (that mismatch is what triggered this
+	 * migration) - so comparing newRegion to oldRegion would ALWAYS be a cross-region
+	 * classification and never reach the local/cheap path at all. What we actually want
+	 * to know is "is the destination close to where the device physically is right now",
+	 * which is newRegion vs currentRegion: DECENTRALIZED's candidate hosts are always
+	 * drawn from the device's current region by construction, so its migrations are
+	 * always local under this comparison (matching the "avoid the shared MAN whenever the
+	 * topology allows" requirement); CENTRALIZED's load-balanced pick may or may not land
+	 * in the device's current region, so its migrations are sometimes local, sometimes
+	 * cross-region - exactly the "CENTRALIZED can potentially traverse the shared MAN"
+	 * property this stage is meant to expose.
+	 *
+	 * The service's "location" (pinnedHostByDevice/pinnedRegionByDevice) is updated ONLY
+	 * on success. This does not touch CloudSim's actual VM/Host binding - see the Stage 2
+	 * inspection notes: this simulator's task routing is already stateless per task
+	 * (every task is independently placed by selectVm() regardless of prior placement),
+	 * so there is no real VM-to-host binding to move; "migrating the service" here means
+	 * simulating the network cost of a hypothetical state transfer and updating this
+	 * bookkeeping used for future migration-trigger detection.
+	 */
+	private void attemptMigration(ThesisEdgeOrchestrator orchestrator, Task task, int deviceId,
+			int oldHost, int oldRegion, int currentRegion) {
+		Vm migrationVm = orchestrator.getVmToOffload(task, SimSettings.GENERIC_EDGE_DEVICE_ID);
+		if (migrationVm == null) {
+			// No capacity visible to this policy anywhere right now - migration cannot
+			// even be attempted (a placement failure, not a network/transfer failure).
+			// Pin stays on oldHost.
+			failedMigrationCount++;
+			SimLogger.printLine(String.format(
+					"MIGRATION_FAILED device=%d oldHost=%d newHost=NONE reason=no_capacity",
+					deviceId, oldHost));
+			return;
+		}
+
+		int newHost = migrationVm.getHost().getId();
+		int newRegion = orchestrator.getHostRegion(newHost);
+
+		if (newHost == oldHost) {
+			// Orchestrator re-selected the same host the service is already on (can
+			// happen under CENTRALIZED's full visibility if it is still the best-fit
+			// choice): nothing to transfer, immediate success, pin unchanged.
+			successfulMigrationCount++;
+			SimLogger.printLine(String.format(
+					"MIGRATION_SUCCESS device=%d oldHost=%d newHost=%d delay=0.0000 (no-op: same host re-selected)",
+					deviceId, oldHost, newHost));
+			return;
+		}
+
+		double dataSizeKb = thesisConfig.getMigrationDataSizeKb();
+		ThesisNetworkModel networkModel =
+				(ThesisNetworkModel) SimManager.getInstance().getNetworkModel();
+
+		// Same-region hop (destination close to where the device IS NOW): bandwidth-limited
+		// only, bypasses the shared MAN queue. Cross-region hop (destination far from the
+		// device's current location): shares the SAME congested MM1 queue as real MAN
+		// task traffic. See the currentRegion vs oldRegion note in the method javadoc above
+		// for why this compares against currentRegion, not oldRegion.
+		double delay = (newRegion == currentRegion)
+				? networkModel.getLocalMigrationDelay(dataSizeKb)
+				: networkModel.getManMigrationTransferDelay(dataSizeKb);
+
+		SimLogger.printLine(String.format(
+				"MIGRATION_START device=%d oldHost=%d oldRegion=%d newHost=%d newRegion=%d data=%.1fKB policy=%s",
+				deviceId, oldHost, oldRegion, newHost, newRegion, dataSizeKb, orchestrator.getPolicy()));
+
+		if (delay <= 0) {
+			// Network could not support the transfer (congested MM1 queue saturated, or
+			// same-region transfer exceeded the 15s cap) - pin stays on oldHost.
+			failedMigrationCount++;
+			SimLogger.printLine(String.format(
+					"MIGRATION_FAILED device=%d oldHost=%d newHost=%d reason=network_congestion",
+					deviceId, oldHost, newHost));
+			return;
+		}
+
+		// Success: service location moves to the new host/region.
+		pinnedHostByDevice.put(deviceId, newHost);
+		pinnedRegionByDevice.put(deviceId, newRegion);
+		successfulMigrationCount++;
+		totalMigrationDataKb += dataSizeKb;
+		totalMigrationTime += delay;
+		if (delay > maxMigrationTime)
+			maxMigrationTime = delay;
+
+		SimLogger.printLine(String.format(
+				"MIGRATION_SUCCESS device=%d oldHost=%d newHost=%d delay=%.4f",
+				deviceId, oldHost, newHost, delay));
+	}
+
+	/** Total migration events detected across all devices (Stage 1 instrumentation). */
+	public int getTotalMigrationCount() {
+		return totalMigrationCount;
+	}
+
+	/** Migration count for a single device (Stage 1 instrumentation). */
+	public int getMigrationCount(int deviceId) {
+		Integer count = migrationCountByDevice.get(deviceId);
+		return count == null ? 0 : count;
+	}
+
+	// THESIS ADDITION - mobility Stage 2 metrics getters.
+
+	/** Migration attempts that completed the transfer successfully. */
+	public int getSuccessfulMigrationCount() {
+		return successfulMigrationCount;
+	}
+
+	/** Migration attempts that failed (network congestion, cap exceeded, or no capacity). */
+	public int getFailedMigrationCount() {
+		return failedMigrationCount;
+	}
+
+	/** Total service-state data (KB) actually transferred by successful migrations. */
+	public double getTotalMigrationDataKb() {
+		return totalMigrationDataKb;
+	}
+
+	/** Sum of successful migration delays (seconds). */
+	public double getTotalMigrationTime() {
+		return totalMigrationTime;
+	}
+
+	/** Mean delay (seconds) of successful migrations; 0 if none succeeded. */
+	public double getAverageMigrationTime() {
+		return successfulMigrationCount == 0 ? 0 : totalMigrationTime / successfulMigrationCount;
+	}
+
+	/** Largest single successful migration delay (seconds). */
+	public double getMaxMigrationTime() {
+		return maxMigrationTime;
+	}
+
 	public void submitTask(TaskProperty edgeTask) {
 		// Submission pipeline:
 		// 1) Create Task & record submission location
@@ -424,11 +679,15 @@ public class ThesisMobileDeviceManager extends MobileDeviceManager {
 				
 				if(selectedVM instanceof EdgeVM){
 					EdgeHost host = (EdgeHost)(selectedVM.getHost());
-					
+
 					//if neighbor edge device is selected
 					if(host.getLocation().getServingWlanId() != task.getSubmittedLocation().getServingWlanId()){
 						nextEvent = REQUEST_RECEIVED_BY_EDGE_DEVICE_TO_RELAY_NEIGHBOR;
 					}
+
+					// THESIS ADDITION - mobility Stage 1: migration detection (instrumentation
+					// only; does not affect nextEvent, delay, or any routing decision above).
+					detectMigration(task, host.getId(), currentLocation);
 				}
 				networkModel.uploadStarted(currentLocation, nextDeviceForNetworkModel);
 				

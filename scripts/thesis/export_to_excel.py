@@ -244,6 +244,29 @@ def parse_paired_compliance_table(stdout_text):
     return rows
 
 
+def parse_migration_summary_table(stdout_text):
+    """Stage 2 mobility work: devices/policy/opportunities/successful/failed/dataKB/
+    avgTime/maxTime, from analyze_run.py's print_migration_summary(). Returns [] for a
+    pre-Stage-2 run (analyze_run.py prints nothing at all in that case, so the header
+    marker below is simply never found - not an error)."""
+    lines = stdout_text.splitlines()
+    start = _find_block(lines, "opport.")
+    if start is None:
+        return []
+    rows = []
+    for ln in _collect_rows(lines, start):
+        parts = ln.split()
+        if len(parts) != 8:
+            continue
+        devices, policy, opport, success, failed, data_kb, avg_time, max_time = parts
+        rows.append(dict(
+            devices=int(devices), policy=policy,
+            opportunities=int(opport), successful=int(success), failed=int(failed),
+            total_data_kb=float(data_kb), avg_time=float(avg_time), max_time=float(max_time),
+        ))
+    return rows
+
+
 _DOMINANT_RE = re.compile(r"^(\S+)\s+\((\d+)\)$")
 
 
@@ -391,6 +414,26 @@ def write_failure_breakdown_sheet(wb, breakdown_rows):
     return ws
 
 
+def write_migration_summary_sheet(wb, migration_rows):
+    """Stage 2 mobility work: migration opportunities/attempts/successes per
+    (devices, policy). Sheet is simply omitted if migration_rows is empty (a
+    pre-Stage-2 run) rather than writing an empty sheet."""
+    if not migration_rows:
+        return None
+    ws = wb.create_sheet("Migration Summary")
+    headers = ["Devices", "Policy", "Migration Opportunities", "Successful Migrations",
+               "Failed Migrations", "Total Data Transferred (KB)",
+               "Avg Migration Time (s)", "Max Migration Time (s)"]
+    ws.append(headers)
+    for r in sorted(migration_rows, key=lambda x: (x["devices"], x["policy"])):
+        ws.append([r["devices"], r["policy"], r["opportunities"], r["successful"],
+                   r["failed"], r["total_data_kb"], r["avg_time"], r["max_time"]])
+    style_header(ws)
+    border_data(ws)
+    autosize(ws)
+    return ws
+
+
 def write_summary_sheet(wb, paired_last_row, results_dir):
     ws = wb.create_sheet("Summary", 0)
     ws["A1"] = "Thesis sweep summary"
@@ -440,6 +483,9 @@ def build_workbook(stdout_text, results_dir, config_dict=None):
     breakdown_rows = parse_failure_breakdown_table(stdout_text)
     paired_rows = parse_paired_compliance_table(stdout_text)
     dominant_rows = parse_paired_dominant_table(stdout_text)
+    # Stage 2 mobility work: empty is EXPECTED for a pre-Stage-2 run (no MIGRATION.log
+    # files exist yet), so this is deliberately excluded from the warnings check below.
+    migration_rows = parse_migration_summary_table(stdout_text)
 
     warnings = []
     for label, rows in [("compliance/MAN-hop", compliance_rows),
@@ -474,6 +520,7 @@ def build_workbook(stdout_text, results_dir, config_dict=None):
     write_failure_mechanism_sheet(wb, dominant_rows)
     write_compliance_detail_sheet(wb, compliance_rows)
     write_failure_breakdown_sheet(wb, breakdown_rows)
+    write_migration_summary_sheet(wb, migration_rows)
     # write_summary_sheet(wb, paired_last_row, results_dir)  # THESIS: disabled, not needed
 
     return wb
